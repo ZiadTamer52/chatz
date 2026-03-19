@@ -426,12 +426,18 @@ db.auth.onAuthStateChange(async(event,session)=>{
   }
 });
 
+// Safety net - never stuck more than 4 seconds
 showLoading('Loading…');
+setTimeout(()=>{hideLoading();if(document.getElementById('authLoading').classList.contains('show')){showScreen('authScreen')}},4000);
 db.auth.getSession().then(({data:{session}})=>{if(!session){hideLoading();showScreen('authScreen')}});
 
 async function loadProfile(){
-  const{data}=await db.from('profiles').select('display_name').eq('id',currentUser.id).single();
-  displayName=data?.display_name||currentUser.email.split('@')[0];
+  try{
+    const{data,error}=await db.from('profiles').select('display_name').eq('id',currentUser.id).maybeSingle();
+    displayName=(data&&data.display_name)?data.display_name:currentUser.email.split('@')[0];
+  }catch(e){
+    displayName=currentUser.email.split('@')[0];
+  }
 }
 
 // ── AUTH TABS ─────────────────────────────────────────
