@@ -376,8 +376,7 @@ const db=createClient(SUPABASE_URL,SUPABASE_KEY,{
   auth:{
     persistSession:true,
     storageKey:'chat_session',
-    storage:window.localStorage,
-    lockAcquireTimeout:3000,
+    autoRefreshToken:true,
     detectSessionInUrl:false,
   }
 });
@@ -416,7 +415,7 @@ function loadMyStickers(){try{return JSON.parse(localStorage.getItem('stickers_'
 function saveMyStickers(){localStorage.setItem('stickers_'+currentUser.id,JSON.stringify(myStickers))}
 
 // ── AUTH STATE ────────────────────────────────────────
-db.auth.onAuthStateChange(async(event,session)=>{
+async function bootUser(session){
   if(session&&session.user){
     currentUser=session.user;
     await loadProfile();
@@ -432,12 +431,20 @@ db.auth.onAuthStateChange(async(event,session)=>{
     hideLoading();
     showScreen('authScreen');
   }
-});
+}
 
-// Safety net - never stuck more than 4 seconds
+// Check existing session immediately on load (keeps user logged in)
 showLoading('Loading…');
-setTimeout(()=>{hideLoading();if(document.getElementById('authLoading').classList.contains('show')){showScreen('authScreen')}},4000);
-db.auth.getSession().then(({data:{session}})=>{if(!session){hideLoading();showScreen('authScreen')}});
+db.auth.getSession().then(({data:{session}})=>{
+  bootUser(session);
+}).catch(()=>{hideLoading();showScreen('authScreen')});
+
+// Listen for future auth changes (login / logout)
+db.auth.onAuthStateChange(async(event,session)=>{
+  if(event==='SIGNED_IN') await bootUser(session);
+  if(event==='SIGNED_OUT') await bootUser(null);
+  if(event==='TOKEN_REFRESHED') currentUser=session?.user||currentUser;
+});
 
 async function loadProfile(){
   try{
