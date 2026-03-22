@@ -483,6 +483,9 @@ function togglePassword(){
 function toEmail(username){
   return username.toLowerCase().trim().replace(/[^a-z0-9_]/g,'_')+'@chat.app';
 }
+function getUsername(){
+  return currentUser?.email?.replace('@chat.app','')||displayName||'user';
+}
 
 // ── SIGN IN / SIGN UP ─────────────────────────────────
 document.getElementById('authSubmitBtn').addEventListener('click',async()=>{
@@ -693,7 +696,7 @@ function enterChat(g){
   document.getElementById('chatGroupMembers').textContent='Loading…';
   document.getElementById('msgList').innerHTML='<div class="loading-msgs"><div class="spinner"></div><span>Loading…</span></div>';
   document.getElementById('typingBar').textContent='';
-  closeAllPanels();showScreen('chatScreen');
+  closeAllPanels();showScreen('chatScreen');requestNotifPermission();
   loadMessages(g.id);subscribeChat(g.id);renderStickerGrid();
 }
 document.getElementById('backBtn').addEventListener('click',()=>{
@@ -822,7 +825,7 @@ async function uploadVoice(blob){
   const{error}=await db.storage.from('chat-files').upload(path,blob,{contentType:'audio/webm'});
   if(error){alert('Voice upload failed: '+error.message);return}
   const{data:{publicUrl}}=db.storage.from('chat-files').getPublicUrl(path);
-  await db.from('messages').insert({user_id:currentUser.id,display_name:displayName,text:'',type:'voice',file_url:publicUrl,group_id:currentGroup.id});
+  await db.from('messages').insert({user_id:currentUser.id,username:getUsername(),display_name:displayName||getUsername(),text:'',type:'voice',file_url:publicUrl,group_id:currentGroup.id});
 }
 
 // PHOTO/VIDEO
@@ -844,7 +847,7 @@ document.getElementById('mediaFileInput').addEventListener('change',async functi
   clearInterval(pi);document.getElementById(tempId)?.remove();
   if(error){alert('Upload failed: '+error.message);return}
   const{data:{publicUrl}}=db.storage.from('chat-files').getPublicUrl(path);
-  await db.from('messages').insert({user_id:currentUser.id,display_name:displayName,text:'',type:isVideo?'video':'photo',file_url:publicUrl,file_name:file.name,file_size:file.size,group_id:currentGroup.id});
+  await db.from('messages').insert({user_id:currentUser.id,username:getUsername(),display_name:displayName||getUsername(),text:'',type:isVideo?'video':'photo',file_url:publicUrl,file_name:file.name,file_size:file.size,group_id:currentGroup.id});
 });
 function openLightbox(url){
   const box=document.createElement('div');box.className='lightbox';
@@ -859,7 +862,7 @@ function renderStickerGrid(){
   addBtn.addEventListener('click',()=>document.getElementById('stickerMakerModal').classList.add('show'));grid.appendChild(addBtn);
   myStickers.forEach(url=>{const cell=document.createElement('div');cell.className='sticker-cell';cell.innerHTML=`<img src="${url}" loading="lazy">`;cell.addEventListener('click',()=>sendSticker(url));grid.appendChild(cell)});
 }
-async function sendSticker(url){closeAllPanels();await db.from('messages').insert({user_id:currentUser.id,display_name:displayName,text:'',type:'sticker',file_url:url,group_id:currentGroup.id})}
+async function sendSticker(url){closeAllPanels();await db.from('messages').insert({user_id:currentUser.id,username:getUsername(),display_name:displayName||getUsername(),text:'',type:'sticker',file_url:url,group_id:currentGroup.id})}
 document.getElementById('stickerDropZone').addEventListener('click',()=>document.getElementById('stickerFileInput').click());
 document.getElementById('stickerFileInput').addEventListener('change',e=>{
   const file=e.target.files[0];if(!file)return;
@@ -880,6 +883,53 @@ document.getElementById('stickerUploadBtn').addEventListener('click',async()=>{
   myStickers.unshift(publicUrl);saveMyStickers();document.getElementById('stickerCancelBtn').click();renderStickerGrid();
 });
 
+
+// ── NOTIFICATIONS ─────────────────────────────────────
+// Generate a simple beep sound using Web Audio API
+function playNotifSound(){
+  try{
+    const ctx=new(window.AudioContext||window.webkitAudioContext)();
+    const osc=ctx.createOscillator();
+    const gain=ctx.createGain();
+    osc.connect(gain);gain.connect(ctx.destination);
+    osc.frequency.value=820;
+    osc.type='sine';
+    gain.gain.setValueAtTime(0,ctx.currentTime);
+    gain.gain.linearRampToValueAtTime(0.3,ctx.currentTime+0.01);
+    gain.gain.exponentialRampToValueAtTime(0.001,ctx.currentTime+0.3);
+    osc.start(ctx.currentTime);osc.stop(ctx.currentTime+0.3);
+  }catch(e){}
+}
+
+// Request push notification permission
+async function requestNotifPermission(){
+  if('Notification' in window && Notification.permission==='default'){
+    await Notification.requestPermission();
+  }
+}
+
+function showPushNotif(name,text){
+  if(document.visibilityState==='visible')return; // only when app is in background
+  if(!('Notification' in window)||Notification.permission!=='granted')return;
+  try{
+    new Notification(name,{
+      body:text.length>60?text.slice(0,60)+'…':text,
+      icon:'/icon-192.png',
+      badge:'/icon-192.png',
+      vibrate:[200,100,200],
+      tag:'chat-msg', // replaces previous notification instead of stacking
+    });
+  }catch(e){}
+}
+
+function handleIncomingMessage(m){
+  if(m.user_id===currentUser?.id)return; // don't notify for own messages
+  const name=m.display_name||m.username||'Someone';
+  const body=m.type==='voice'?'🎤 Voice message':m.type==='photo'?'📷 Photo':m.type==='video'?'🎬 Video':m.type==='sticker'?'🎨 Sticker':(m.text||'');
+  playNotifSound();
+  showPushNotif(name+' in '+currentGroup?.name, body);
+}
+
 // REALTIME
 function subscribeChat(groupId){
   if(chatChannel)chatChannel.unsubscribe();
@@ -888,7 +938,7 @@ function subscribeChat(groupId){
     const list=document.getElementById('msgList');if(list.querySelector('.loading-msgs'))list.innerHTML='';
     const prev=allMessages[allMessages.length-1]||null;const dl=dateLabel(m.created_at);
     if(!prev||dateLabel(prev.created_at)!==dl){const div=document.createElement('div');div.className='day-divider';div.textContent=dl;list.appendChild(div)}
-    list.appendChild(buildMsgEl(m,prev));allMessages.push(m);
+    list.appendChild(buildMsgEl(m,prev));allMessages.push(m);handleIncomingMessage(m);
     const atBottom=list.scrollHeight-list.scrollTop-list.clientHeight<150;
     if(atBottom||m.user_id===currentUser.id)list.scrollTop=list.scrollHeight;
   });
@@ -913,7 +963,8 @@ async function sendMessage(){
   ta.value='';ta.style.height='auto';toggleSendRecord();closeAllPanels();
   const{error}=await db.from('messages').insert({
     user_id:currentUser.id,
-    display_name:displayName||currentUser.email.split('@')[0],
+    username:getUsername(),
+    display_name:displayName||getUsername(),
     text,
     type:'text',
     group_id:currentGroup.id
