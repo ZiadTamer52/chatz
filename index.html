@@ -501,11 +501,13 @@ db.auth.onAuthStateChange(async(event,session)=>{
 async function loadProfile(){
   try{
     const timeout=new Promise((_,rej)=>setTimeout(()=>rej(new Error('timeout')),3000));
-    const query=db.from('profiles').select('display_name').eq('id',currentUser.id).maybeSingle();
+    const query=db.from('profiles').select('display_name,username').eq('id',currentUser.id).maybeSingle();
     const{data}=await Promise.race([query,timeout]);
-    displayName=(data&&data.display_name)?data.display_name:currentUser.email.replace('@chat.app','');
+    // Priority: profiles table -> user_metadata -> email username
+    const fallback=currentUser.user_metadata?.display_name||currentUser.email.replace('@chat.app','')||'User';
+    displayName=(data&&data.display_name)?data.display_name:fallback;
   }catch(e){
-    displayName=currentUser.email.replace('@chat.app','')||'User';
+    displayName=currentUser.user_metadata?.display_name||currentUser.email.replace('@chat.app','')||'User';
   }
 }
 
@@ -575,7 +577,7 @@ document.getElementById('authSubmitBtn').addEventListener('click',async()=>{
     }
     if(signUpData.user){
       const recoveryEmail=document.getElementById('recoveryEmailInput').value.trim();
-      await db.from('profiles').upsert({id:signUpData.user.id,display_name:name,username,recovery_email:recoveryEmail||null});
+      await db.from('profiles').upsert({id:signUpData.user.id,display_name:name,username});
     }
   } else {
     const{error}=await db.auth.signInWithPassword({email:fakeEmail,password});
