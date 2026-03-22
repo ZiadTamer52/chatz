@@ -12,6 +12,12 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Chat">
 <link rel="apple-touch-icon" href="/icon-192.png">
+<link rel="manifest" href="/manifest.json">
+<meta name="theme-color" content="#2d6ef5">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Chat">
+<link rel="apple-touch-icon" href="/icon-192.png">
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
@@ -762,6 +768,8 @@ document.getElementById('joinConfirmBtn').addEventListener('click',async()=>{
 });
 
 // ── CHAT ──────────────────────────────────────────────
+let pollTimer=null;
+
 function enterChat(g){
   currentGroup=g;allMessages=[];reactions={};
   document.getElementById('chatGroupName').textContent=g.name;
@@ -772,21 +780,57 @@ function enterChat(g){
   document.getElementById('typingBar').textContent='';
   closeAllPanels();showScreen('chatScreen');requestNotifPermission();
   loadMessages(g.id);subscribeChat(g.id);renderStickerGrid();
+  startPolling(g.id);
 }
+
 document.getElementById('backBtn').addEventListener('click',()=>{
   if(chatChannel){chatChannel.unsubscribe();chatChannel=null}
+  stopPolling();
   currentGroup=null;showScreen('groupsScreen');closeAllPanels();
 });
 
+function startPolling(groupId){
+  stopPolling();
+  pollTimer=setInterval(async()=>{
+    if(!currentGroup||currentGroup.id!==groupId)return;
+    const lastId=allMessages.length?allMessages[allMessages.length-1].id:0;
+    try{
+      const{data}=await db.from('messages').select('*')
+        .eq('group_id',groupId).gt('id',lastId)
+        .order('created_at',{ascending:true}).limit(50);
+      if(!data||!data.length)return;
+      const list=document.getElementById('msgList');if(!list)return;
+      if(list.querySelector('.loading-msgs'))list.innerHTML='';
+      data.forEach(m=>{
+        if(allMessages.find(x=>x.id===m.id))return;
+        const prev=allMessages[allMessages.length-1]||null;
+        const dl=dateLabel(m.created_at);
+        if(!prev||dateLabel(prev.created_at)!==dl){const div=document.createElement('div');div.className='day-divider';div.textContent=dl;list.appendChild(div)}
+        list.appendChild(buildMsgEl(m,prev));allMessages.push(m);handleIncomingMessage(m);
+      });
+      const atBottom=list.scrollHeight-list.scrollTop-list.clientHeight<150;
+      if(atBottom)list.scrollTop=list.scrollHeight;
+    }catch(e){}
+  },4000);
+}
+
+function stopPolling(){
+  if(pollTimer){clearInterval(pollTimer);pollTimer=null;}
+}
+
 async function loadMessages(groupId){
-  const[{data:msgs,error:mErr},{data:reacts}]=await Promise.all([
-    db.from('messages').select('*').eq('group_id',groupId).order('created_at',{ascending:true}).limit(200),
-    db.from('reactions').select('*')
-  ]);
-  if(mErr){document.getElementById('msgList').innerHTML=`<div class="loading-msgs" style="color:var(--danger)">⚠️ ${mErr.message}</div>`;return}
-  allMessages=msgs||[];
-  (reacts||[]).forEach(r=>{if(!reactions[r.message_id])reactions[r.message_id]=[];reactions[r.message_id].push(r)});
-  renderAll();
+  try{
+    const[{data:msgs,error:mErr},{data:reacts}]=await Promise.all([
+      db.from('messages').select('*').eq('group_id',groupId).order('created_at',{ascending:true}).limit(200),
+      db.from('reactions').select('*')
+    ]);
+    if(mErr){document.getElementById('msgList').innerHTML='<div class="loading-msgs" style="color:var(--danger)">⚠️ '+mErr.message+'</div>';return}
+    allMessages=msgs||[];
+    (reacts||[]).forEach(r=>{if(!reactions[r.message_id])reactions[r.message_id]=[];reactions[r.message_id].push(r)});
+    renderAll();
+  }catch(e){
+    document.getElementById('msgList').innerHTML='<div class="loading-msgs" style="color:var(--danger)">⚠️ Could not load messages.</div>';
+  }
 }
 function renderAll(){
   const list=document.getElementById('msgList');list.innerHTML='';
@@ -1109,6 +1153,13 @@ function closeAllPanels(){document.getElementById('emojiPanel').classList.remove
 document.getElementById('emojiToggleBtn').addEventListener('click',()=>{document.getElementById('stickerPanel').classList.remove('open');document.getElementById('emojiPanel').classList.toggle('open')});
 document.getElementById('stickerToggleBtn').addEventListener('click',()=>{document.getElementById('emojiPanel').classList.remove('open');document.getElementById('stickerPanel').classList.toggle('open')});
 document.getElementById('msgList').addEventListener('click',closeAllPanels);
+</script>
+<script>
+if('serviceWorker' in navigator){
+  window.addEventListener('load', function() {
+    navigator.serviceWorker.register('/sw.js').catch(function(){});
+  });
+}
 </script>
 <script>
 if('serviceWorker' in navigator){
