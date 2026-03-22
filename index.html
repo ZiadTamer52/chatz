@@ -421,43 +421,63 @@ function loadMyStickers(){try{return JSON.parse(localStorage.getItem('stickers_'
 function saveMyStickers(){localStorage.setItem('stickers_'+currentUser.id,JSON.stringify(myStickers))}
 
 // ── AUTH STATE ────────────────────────────────────────
+let booted=false;
 async function bootUser(session){
-  if(session&&session.user){
-    currentUser=session.user;
-    await loadProfile();
-    joinedGroups=loadJoined();
-    myStickers=loadMyStickers();
-    renderTopAvatar();
-    document.getElementById('userNameDisplay').textContent=displayName;
-    hideLoading();
-    showScreen('groupsScreen');
-    loadGroups();
-  } else {
-    currentUser=null;displayName='';
+  if(booted)return; // prevent double boot
+  booted=true;
+  try{
+    if(session&&session.user){
+      currentUser=session.user;
+      await loadProfile();
+      joinedGroups=loadJoined();
+      myStickers=loadMyStickers();
+      renderTopAvatar();
+      document.getElementById('userNameDisplay').textContent=displayName;
+      hideLoading();
+      showScreen('groupsScreen');
+      loadGroups();
+    } else {
+      currentUser=null;displayName='';
+      hideLoading();
+      showScreen('authScreen');
+    }
+  }catch(e){
+    console.error('Boot error:',e);
     hideLoading();
     showScreen('authScreen');
   }
 }
 
-// Check existing session immediately on load (keeps user logged in)
+// Hard timeout - NEVER stuck loading more than 3 seconds
 showLoading('Loading…');
-db.auth.getSession().then(({data:{session}})=>{
-  bootUser(session);
-}).catch(()=>{hideLoading();showScreen('authScreen')});
+const bootTimeout=setTimeout(()=>{
+  if(!booted){booted=true;hideLoading();showScreen('authScreen');}
+},3000);
 
-// Listen for future auth changes (login / logout)
+// Check session on load
+db.auth.getSession().then(({data:{session}})=>{
+  clearTimeout(bootTimeout);
+  bootUser(session);
+}).catch(()=>{
+  clearTimeout(bootTimeout);
+  booted=true;hideLoading();showScreen('authScreen');
+});
+
+// Listen for auth changes
 db.auth.onAuthStateChange(async(event,session)=>{
-  if(event==='SIGNED_IN') await bootUser(session);
-  if(event==='SIGNED_OUT') await bootUser(null);
-  if(event==='TOKEN_REFRESHED') currentUser=session?.user||currentUser;
+  if(event==='SIGNED_IN'){booted=false;await bootUser(session);}
+  if(event==='SIGNED_OUT'){booted=false;await bootUser(null);}
+  if(event==='TOKEN_REFRESHED'&&currentUser){currentUser=session?.user||currentUser;}
 });
 
 async function loadProfile(){
   try{
-    const{data,error}=await db.from('profiles').select('display_name').eq('id',currentUser.id).maybeSingle();
-    displayName=(data&&data.display_name)?data.display_name:currentUser.email.split('@')[0];
+    const timeout=new Promise((_,rej)=>setTimeout(()=>rej(new Error('timeout')),3000));
+    const query=db.from('profiles').select('display_name').eq('id',currentUser.id).maybeSingle();
+    const{data}=await Promise.race([query,timeout]);
+    displayName=(data&&data.display_name)?data.display_name:currentUser.email.replace('@chat.app','');
   }catch(e){
-    displayName=currentUser.email.split('@')[0];
+    displayName=currentUser.email.replace('@chat.app','')||'User';
   }
 }
 
