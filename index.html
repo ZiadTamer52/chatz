@@ -228,6 +228,11 @@ html,body{height:100%;width:100%;overflow:hidden;font-family:'DM Sans',sans-seri
 
     <input class="field" type="text" id="usernameInput" placeholder="Username…" maxlength="32" autocomplete="off" autocorrect="off" spellcheck="false">
 
+    <!-- Recovery email (signup only) -->
+    <div id="recoveryEmailWrap" style="display:none">
+      <input class="field" type="email" id="recoveryEmailInput" placeholder="Recovery email (optional — for password reset)…" autocomplete="email" inputmode="email">
+    </div>
+
     <div class="field-wrap">
       <input class="field" type="password" id="passwordInput" placeholder="Password…" autocomplete="current-password">
       <button class="field-eye" id="eyeBtn" onclick="togglePassword()">👁️</button>
@@ -236,7 +241,24 @@ html,body{height:100%;width:100%;overflow:hidden;font-family:'DM Sans',sans-seri
     <div class="err" id="authErr"></div>
 
     <button class="btn" id="authSubmitBtn">Sign In</button>
+    <button class="btn ghost" id="forgotBtn" style="display:block" onclick="showForgotScreen()">Forgot password?</button>
     <div class="success-msg" id="authSuccess"></div>
+  </div>
+</div>
+
+<!-- ══ FORGOT PASSWORD SCREEN ══ -->
+<div class="screen hidden" id="forgotScreen">
+  <div style="flex:1;display:flex;align-items:center;justify-content:center;padding:28px;background:var(--bg)">
+    <div class="auth-card">
+      <div class="auth-logo">🔑</div>
+      <div class="auth-title">Reset Password</div>
+      <div class="auth-sub">Enter your username and we'll send a reset link to your recovery email</div>
+      <input class="field" type="text" id="forgotUsernameInput" placeholder="Your username…" autocorrect="off" autocapitalize="off" spellcheck="false">
+      <div class="err" id="forgotErr"></div>
+      <div class="success-msg" id="forgotSuccess"></div>
+      <button class="btn" id="forgotSubmitBtn">Send Reset Link</button>
+      <button class="btn secondary" onclick="showScreen('authScreen')">← Back to Sign In</button>
+    </div>
   </div>
 </div>
 
@@ -488,10 +510,19 @@ function switchTab(mode){
   document.getElementById('tabSignIn').classList.toggle('active',!isSignUp);
   document.getElementById('tabSignUp').classList.toggle('active',isSignUp);
   document.getElementById('displayNameWrap').style.display=isSignUp?'block':'none';
+  document.getElementById('recoveryEmailWrap').style.display=isSignUp?'block':'none';
+  document.getElementById('forgotBtn').style.display=isSignUp?'none':'block';
   document.getElementById('authSubmitBtn').textContent=isSignUp?'Create Account':'Sign In';
   document.getElementById('authSub').textContent=isSignUp?'Pick a username and password':'Sign in to chat with your friends';
   document.getElementById('authErr').textContent='';
   document.getElementById('authSuccess').textContent='';
+}
+
+function showForgotScreen(){
+  document.getElementById('forgotUsernameInput').value='';
+  document.getElementById('forgotErr').textContent='';
+  document.getElementById('forgotSuccess').textContent='';
+  showScreen('forgotScreen');
 }
 
 function togglePassword(){
@@ -501,7 +532,8 @@ function togglePassword(){
 
 // Convert username to fake email for Supabase
 function toEmail(username){
-  return username.toLowerCase().trim().replace(/[^a-z0-9_]/g,'_')+'@chat.app';
+  // Keep it simple - just lowercase and trim, no character replacement
+  return username.toLowerCase().trim()+'@chat.app';
 }
 function getUsername(){
   return currentUser?.email?.replace('@chat.app','')||displayName||'user';
@@ -529,14 +561,15 @@ document.getElementById('authSubmitBtn').addEventListener('click',async()=>{
     if(displayNameVal&&displayNameVal.length<2){err.textContent='Display name must be at least 2 characters';btn.classList.remove('btn-loading');return}
     if(password.length<6){err.textContent='Password must be at least 6 characters';btn.classList.remove('btn-loading');return}
     // Check if username already taken by trying to sign in first
-    const{data:signUpData,error:signUpErr}=await db.auth.signUp({email:fakeEmail,password,options:{data:{username,display_name:name}}});
+    const{data:signUpData,error:signUpErr}=await db.auth.signUp({email:fakeEmail,password,options:{emailRedirectTo:undefined,data:{username,display_name:name}}});
     if(signUpErr){
       btn.classList.remove('btn-loading');
       err.textContent=signUpErr.message.includes('already')||signUpErr.message.includes('taken')?'Username already taken, choose another':signUpErr.message;
       return;
     }
     if(signUpData.user){
-      await db.from('profiles').upsert({id:signUpData.user.id,display_name:name,username});
+      const recoveryEmail=document.getElementById('recoveryEmailInput').value.trim();
+      await db.from('profiles').upsert({id:signUpData.user.id,display_name:name,username,recovery_email:recoveryEmail||null});
     }
   } else {
     const{error}=await db.auth.signInWithPassword({email:fakeEmail,password});
@@ -549,8 +582,29 @@ document.getElementById('authSubmitBtn').addEventListener('click',async()=>{
   btn.classList.remove('btn-loading');
 });
 
+// ── FORGOT PASSWORD ───────────────────────────────────
+document.getElementById('forgotSubmitBtn').addEventListener('click',async()=>{
+  const uname=document.getElementById('forgotUsernameInput').value.trim();
+  const err=document.getElementById('forgotErr');
+  const suc=document.getElementById('forgotSuccess');
+  err.textContent='';suc.textContent='';
+  if(!uname){err.textContent='Please enter your username';return}
+  const btn=document.getElementById('forgotSubmitBtn');btn.classList.add('btn-loading');
+  // Look up recovery email from profiles
+  const{data,error}=await db.from('profiles').select('recovery_email').eq('username',uname.toLowerCase().trim()).maybeSingle();
+  if(error||!data){btn.classList.remove('btn-loading');err.textContent='Username not found';return}
+  if(!data.recovery_email){btn.classList.remove('btn-loading');err.textContent='No recovery email set for this account. Contact the admin.';return}
+  // Send reset to their real email
+  const{error:resetErr}=await db.auth.resetPasswordForEmail(data.recovery_email,{redirectTo:window.location.origin});
+  btn.classList.remove('btn-loading');
+  if(resetErr){err.textContent=resetErr.message;return}
+  suc.textContent='✅ Reset link sent to your recovery email!';
+});
+
+document.getElementById('forgotUsernameInput').addEventListener('keydown',e=>{if(e.key==='Enter')document.getElementById('forgotSubmitBtn').click()});
+
 // Enter key support
-['usernameInput','passwordInput','displayNameInput'].forEach(id=>{
+['usernameInput','passwordInput','displayNameInput','recoveryEmailInput'].forEach(id=>{
   document.getElementById(id)?.addEventListener('keydown',e=>{if(e.key==='Enter')document.getElementById('authSubmitBtn').click()});
 });
 
@@ -951,30 +1005,76 @@ function handleIncomingMessage(m){
 }
 
 // REALTIME
+let realtimeRetryTimer=null;
+
 function subscribeChat(groupId){
-  if(chatChannel)chatChannel.unsubscribe();
-  chatChannel=db.channel(`group-${groupId}`,{config:{presence:{key:currentUser.id}}});
-  chatChannel.on('postgres_changes',{event:'INSERT',schema:'public',table:'messages',filter:`group_id=eq.${groupId}`},({new:m})=>{
-    const list=document.getElementById('msgList');if(list.querySelector('.loading-msgs'))list.innerHTML='';
-    const prev=allMessages[allMessages.length-1]||null;const dl=dateLabel(m.created_at);
+  if(chatChannel){chatChannel.unsubscribe();chatChannel=null;}
+  if(realtimeRetryTimer){clearTimeout(realtimeRetryTimer);realtimeRetryTimer=null;}
+
+  chatChannel=db.channel('group-'+groupId, {config:{presence:{key:currentUser.id}}});
+
+  chatChannel.on('postgres_changes',{event:'INSERT',schema:'public',table:'messages',filter:'group_id=eq.'+groupId},({new:m})=>{
+    const list=document.getElementById('msgList');if(!list)return;
+    if(list.querySelector('.loading-msgs'))list.innerHTML='';
+    const prev=allMessages[allMessages.length-1]||null;
+    const dl=dateLabel(m.created_at);
     if(!prev||dateLabel(prev.created_at)!==dl){const div=document.createElement('div');div.className='day-divider';div.textContent=dl;list.appendChild(div)}
     list.appendChild(buildMsgEl(m,prev));allMessages.push(m);handleIncomingMessage(m);
     const atBottom=list.scrollHeight-list.scrollTop-list.clientHeight<150;
     if(atBottom||m.user_id===currentUser.id)list.scrollTop=list.scrollHeight;
   });
+
   chatChannel.on('postgres_changes',{event:'INSERT',schema:'public',table:'reactions'},({new:r})=>{
     if(!reactions[r.message_id])reactions[r.message_id]=[];
     if(!reactions[r.message_id].find(x=>x.user_id===r.user_id&&x.emoji===r.emoji)){reactions[r.message_id].push(r);updateReactionDisplay(r.message_id)}
   });
+
   chatChannel.on('postgres_changes',{event:'DELETE',schema:'public',table:'reactions'},({old:r})=>{
-    if(reactions[r.message_id])reactions[r.message_id]=reactions[r.message_id].filter(x=>!(x.user_id===r.user_id&&x.emoji===r.emoji));updateReactionDisplay(r.message_id);
+    if(reactions[r.message_id])reactions[r.message_id]=reactions[r.message_id].filter(x=>!(x.user_id===r.user_id&&x.emoji===r.emoji));
+    updateReactionDisplay(r.message_id);
   });
-  chatChannel.on('presence',{event:'sync'},()=>{const c=Object.keys(chatChannel.presenceState()).length;document.getElementById('chatGroupMembers').textContent=`${c} member${c!==1?'s':''} online`});
+
+  chatChannel.on('presence',{event:'sync'},()=>{
+    const c=Object.keys(chatChannel.presenceState()).length;
+    const el=document.getElementById('chatGroupMembers');
+    if(el)el.textContent=c+' member'+(c!==1?'s':'')+' online';
+  });
+
   chatChannel.on('broadcast',{event:'typing'},({payload})=>{
-    if(payload.uid===currentUser.id)return;const bar=document.getElementById('typingBar');bar.textContent=`${payload.name} is typing…`;clearTimeout(bar._t);bar._t=setTimeout(()=>{bar.textContent=''},2000);
+    if(payload.uid===currentUser.id)return;
+    const bar=document.getElementById('typingBar');if(!bar)return;
+    bar.textContent=payload.name+' is typing…';
+    clearTimeout(bar._t);bar._t=setTimeout(()=>{bar.textContent=''},2000);
   });
-  chatChannel.subscribe(async status=>{if(status==='SUBSCRIBED')await chatChannel.track({uid:currentUser.id,name:displayName})});
+
+  chatChannel.subscribe(async status=>{
+    console.log('Realtime status:',status);
+    if(status==='SUBSCRIBED'){
+      await chatChannel.track({uid:currentUser.id,name:displayName});
+      // Update indicator
+      const el=document.getElementById('chatGroupMembers');
+      if(el&&el.textContent==='Loading…')el.textContent='Connected';
+    }
+    if(status==='CHANNEL_ERROR'||status==='TIMED_OUT'||status==='CLOSED'){
+      console.warn('Realtime dropped, reconnecting in 3s...');
+      const el=document.getElementById('chatGroupMembers');
+      if(el)el.textContent='Reconnecting…';
+      // Auto reconnect after 3 seconds
+      realtimeRetryTimer=setTimeout(()=>{
+        if(currentGroup&&currentGroup.id===groupId)subscribeChat(groupId);
+      },3000);
+    }
+  });
 }
+
+// Reconnect when app comes back to foreground
+document.addEventListener('visibilitychange',()=>{
+  if(document.visibilityState==='visible'&&currentGroup&&currentUser){
+    if(!chatChannel||chatChannel.state==='closed'||chatChannel.state==='errored'){
+      subscribeChat(currentGroup.id);
+    }
+  }
+});
 
 // SEND
 async function sendMessage(){
